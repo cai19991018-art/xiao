@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>河南粮价分析</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root { --bg:#f6f5f1; --card:#fff; --fg:#222; --mut:#777; --up:#d23c3c; --down:#1f9d55; --acc:#b7791f; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#171717; --card:#232323; --fg:#eee; --mut:#999; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
+  main { max-width:960px; margin:0 auto; padding:16px; }
+  h1 { font-size:20px; margin:4px 0 12px; } h2 { font-size:16px; margin:20px 0 8px; }
+  .card { background:var(--card); border-radius:10px; padding:12px; margin-bottom:10px; box-shadow:0 1px 2px #0001; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:10px; }
+  .tile { cursor:pointer; } .tile b { font-size:22px; display:block; } .mut { color:var(--mut); font-size:13px; }
+  .up { color:var(--up); } .down { color:var(--down); }
+  input, select, button, textarea { font:inherit; padding:8px; border-radius:6px; border:1px solid #8884; background:var(--card); color:var(--fg); }
+  button { background:var(--acc); color:#fff; border:0; cursor:pointer; }
+  form { display:flex; flex-wrap:wrap; gap:8px; } form > * { flex:1 1 120px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; } td, th { padding:6px 4px; border-bottom:1px solid #8882; text-align:left; }
+  .scroll { overflow-x:auto; } #login { display:none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>河南粮价分析</h1>
+  <div id="login" class="card">
+    <form onsubmit="saveKey(event)"><input id="key" type="password" placeholder="输入 API Key"><button>进入</button></form>
+  </div>
+  <div id="app" style="display:none">
+    <div class="grid" id="tiles"></div>
+    <div class="card"><div class="mut" id="chartTitle"></div><canvas id="chart" height="110"></canvas></div>
+
+    <h2>记录本地收购价（元/斤）</h2>
+    <div class="card"><form onsubmit="addPrice(event)">
+      <select id="crop"><option value="corn">玉米</option><option value="wheat">小麦</option></select>
+      <input id="place" placeholder="地点 如 周口" required>
+      <input id="price" type="number" step="0.001" placeholder="价格" required>
+      <input id="pnote" placeholder="备注 水分/容重">
+      <button>保存</button></form></div>
+
+    <h2>一线见闻</h2>
+    <div class="card"><form onsubmit="addNote(event)">
+      <input id="note" placeholder="如：农户惜售，深加工厂提价2分" required style="flex:3 1 240px"><button>记下</button></form>
+      <div id="notes" class="mut"></div></div>
+
+    <h2>天气（未来10天）</h2>
+    <div class="card scroll"><table id="weather"></table></div>
+
+    <h2>预测准确率</h2>
+    <div class="card scroll"><table id="acc"></table></div>
+
+    <h2>预测记录</h2>
+    <div class="card scroll"><table id="preds"></table></div>
+    <h2>经验库</h2>
+    <div class="card" id="lessons"></div>
+  </div>
+</main>
+<script>
+let KEY = ''; try { KEY = localStorage.getItem('grainKey') || ''; } catch (e) {}
+let chart;
+const DIR = { up: '涨', down: '跌', flat: '平' };
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+async function api(path, body) {
+  const r = await fetch(path, { method: body ? 'POST' : 'GET', headers: { 'X-API-Key': KEY, 'Content-Type': 'application/json' }, body: body && JSON.stringify(body) });
+  if (r.status === 401) { showLogin(); throw new Error('401'); }
+  return r.json();
+}
+function showLogin() { document.getElementById('login').style.display = 'block'; document.getElementById('app').style.display = 'none'; }
+function saveKey(e) { e.preventDefault(); KEY = document.getElementById('key').value; try { localStorage.setItem('grainKey', KEY); } catch (e) {} load(); }
+const pct = v => v == null ? '-' : `<span class="${v > 0 ? 'up' : v < 0 ? 'down' : ''}">${v > 0 ? '+' : ''}${v}%</span>`;
+
+async function load() {
+  const c = await api('/api/context');
+  document.getElementById('login').style.display = 'none'; document.getElementById('app').style.display = 'block';
+  document.getElementById('tiles').innerHTML = c.series.map(s => `<div class="card tile" onclick="showChart('${esc(s.series)}')">
+    <div class="mut">${esc(s.name)}</div><b>${s.last_price}</b>
+    <div class="mut">日 ${pct(s.change_1)} · 周 ${pct(s.change_5)} · 月 ${pct(s.change_20)}</div><div class="mut">${s.last_date}</div></div>`).join('') || '<div class="card">暂无数据，等待首次采集…</div>';
+  if (c.series[0]) showChart(c.series[0].series);
+  document.getElementById('notes').innerHTML = c.field_notes.map(n => `<div>${n.date} ${esc(n.content)}</div>`).join('');
+  document.getElementById('weather').innerHTML = '<tr><th>城市</th><th>降水mm</th><th>最高℃</th><th>最低℃</th></tr>' +
+    c.weather_henan_next10d.map(w => `<tr><td>${w.city}</td><td>${w.next10_precip_mm}</td><td>${w.max_temp}</td><td>${w.min_temp}</td></tr>`).join('');
+  document.getElementById('acc').innerHTML = '<tr><th>来源</th><th>周期</th><th>样本</th><th>方向准确率</th><th>区间命中</th></tr>' +
+    c.accuracy.map(a => `<tr><td>${a.source === 'gpt' ? 'GPT' : '统计模型'}</td><td>${a.horizon_days}天</td><td>${a.n}</td><td>${Math.round(a.direction_accuracy * 100)}%</td><td>${Math.round(a.range_hit_rate * 100)}%</td></tr>`).join('') +
+    `<tr><td colspan="5" class="mut">信号权重：趋势 ${c.signal_weights.momentum} · 季节 ${c.signal_weights.seasonal}</td></tr>`;
+  const preds = await api('/api/predictions?limit=40');
+  document.getElementById('preds').innerHTML = '<tr><th>#</th><th>来源</th><th>品种</th><th>周期</th><th>预测</th><th>到期</th><th>结果</th></tr>' +
+    preds.map(p => `<tr><td>${p.id}</td><td>${p.source === 'gpt' ? 'GPT' : '统计'}</td><td>${esc(p.series)}</td><td>${p.horizon_days}天</td>
+      <td>${DIR[p.direction]} ${p.low ?? ''}~${p.high ?? ''}</td><td>${p.target_date}</td>
+      <td>${p.status === 'open' ? '待验证' : (p.correct ? '✅ ' : '❌ ') + pct(p.actual_change_pct)}</td></tr>`).join('');
+  document.getElementById('lessons').innerHTML = c.lessons.map(l => `<div>· ${esc(l.content)} <span class="mut">${l.created_at}</span></div>`).join('') || '<span class="mut">还没有经验，GPT 复盘后会自动积累</span>';
+}
+async function showChart(series) {
+  const d = await api('/api/prices?days=365&series=' + encodeURIComponent(series));
+  document.getElementById('chartTitle').textContent = d.name + '（近一年）';
+  const data = { labels: d.data.map(x => x.date), datasets: [{ data: d.data.map(x => x.price), borderColor: '#b7791f', pointRadius: 0, borderWidth: 2 }] };
+  if (chart) chart.destroy();
+  chart = new Chart(document.getElementById('chart'), { type: 'line', data, options: { plugins: { legend: { display: false } }, scales: { x: { ticks: { maxTicksLimit: 6 } } } } });
+}
+async function addPrice(e) {
+  e.preventDefault();
+  await api('/api/prices', { crop: crop.value, place: place.value, price: +price.value, note: pnote.value || null });
+  price.value = ''; pnote.value = ''; load();
+}
+async function addNote(e) { e.preventDefault(); await api('/api/notes', { content: note.value }); note.value = ''; load(); }
+KEY ? load().catch(() => {}) : showLogin();
+</script>
+</body>
+</html>

@@ -1,5 +1,6 @@
 """联网采集: 新浪期货日线 + Open-Meteo 天气。失败只记日志, 不影响其他任务。"""
 import json
+from datetime import datetime
 import logging
 import re
 import time
@@ -45,6 +46,7 @@ def fetch_futures(days=400):
         except Exception as e:  # 单个品种失败不影响其他
             log.warning("期货 %s 采集失败: %s", series, e)
     log.info("期货采集完成, 写入 %d 条", n)
+    db.put("last_fetch", {"time": datetime.now().isoformat(timespec="minutes"), "rows": n})
     return n
 
 

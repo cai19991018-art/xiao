@@ -4,7 +4,7 @@ from datetime import date, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from app import analysis, config, db, fetchers
+from app import analysis, config, db, fetchers, llm
 
 H = {"X-API-Key": "k"}
 
@@ -13,6 +13,7 @@ H = {"X-API-Key": "k"}
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "t.db"))
     monkeypatch.setattr(config, "API_KEY", "k")
+    monkeypatch.setattr(config, "DEEPSEEK_API_KEY", "")
     monkeypatch.setattr(fetchers, "fetch_futures", lambda: 0)
     monkeypatch.setattr(fetchers, "fetch_weather", lambda: 0)
     from app import main
@@ -22,11 +23,11 @@ def client(tmp_path, monkeypatch):
         yield c
 
 
-def seed(series="futures:corn_dce", days=800, end=None):
+def seed(series="futures:corn_dce", days=800, end=None, base=2300):
     end = end or date.today()
     for i in range(days):
         d = end - timedelta(days=days - 1 - i)
-        db.upsert_price(series, d.isoformat(), 2300 + 50 * math.sin(i / 30) + i * 0.1)
+        db.upsert_price(series, d.isoformat(), base + base / 50 * math.sin(i / 30) + i * 0.1)
 
 
 def test_parse_kline():
@@ -36,98 +37,94 @@ def test_parse_kline():
 
 
 def test_auth(client):
-    assert client.get("/api/context").status_code == 401
-    assert client.get("/api/context", headers=H).status_code == 200
+    assert client.get("/api/meta").status_code == 401
+    assert client.get("/api/meta", headers=H).json()["prefs"]["region"] == "周口"
 
 
-def test_local_price_and_context(client):
-    r = client.post("/api/prices", headers=H, json={"crop": "wheat", "place": "周口", "price": 1.21})
-    assert r.json()["series"] == "local:wheat:周口"
-    client.post("/api/notes", headers=H, json={"content": "农户惜售"})
-    c = client.get("/api/context", headers=H).json()
-    assert c["series"][0]["name"] == "周口小麦收购价"
-    assert c["field_notes"][0]["content"] == "农户惜售"
+def test_resolve_falls_back_to_futures_then_local(client):
+    seed(days=40)
+    m = client.get("/api/market?region=周口&crop=corn", headers=H).json()
+    assert m["basis"] == "期货折算" and 1.0 < m["price"] < 1.3  # 元/吨 ÷ 2000
+    for i in range(20):
+        client.post("/api/prices", headers=H, json={
+            "crop": "corn", "region": "周口", "price": 1.10 + i / 1000,
+            "date": (date.today() - timedelta(days=19 - i)).isoformat()})
+    m = client.get("/api/market?region=周口&crop=corn", headers=H).json()
+    assert m["basis"] == "本地报价" and m["price"] == 1.119
+    assert client.get("/api/market?region=火星&crop=corn", headers=H).status_code == 400
 
 
-def test_stat_prediction_and_evaluate(client):
-    # 历史数据截止 40 天前, 先预测, 再补上后面的数据, 验证到期复盘
-    seed(end=date.today() - timedelta(days=40))
-    assert analysis.run_stat_predictions() == 3
-    assert analysis.run_stat_predictions() == 0  # 同一天不重复
-    seed(days=40, end=date.today())
-    assert analysis.evaluate_due() == 3
-    done = db.rows("SELECT * FROM predictions WHERE status='done'")
-    assert all(p["correct"] in (0, 1) and p["review"] for p in done)
-    acc = analysis.accuracy()
-    assert sum(a["n"] for a in acc) == 3
-    w = analysis.signal_weights()
-    assert 0 < w["momentum"] < 1
+def test_prefs(client):
+    r = client.post("/api/prefs", headers=H, json={"region": "驻马店", "crop": "wheat", "unit": "ton"})
+    assert r.json()["region"] == "驻马店"
+    assert client.get("/api/meta", headers=H).json()["prefs"]["crop"] == "wheat"
 
 
-def test_gpt_prediction_review_loop(client):
-    seed(days=60, end=date.today() - timedelta(days=10))
-    r = client.post("/api/predictions", headers=H, json={
-        "series": "futures:corn_dce", "horizon_days": 7, "direction": "up",
-        "confidence": 0.6, "reasoning": "测试"}).json()
-    # 后续价格大跌, GPT 预测必然错误
-    base = r["base_price"]
-    for i in range(10):
-        d = date.today() - timedelta(days=9 - i)
-        db.upsert_price("futures:corn_dce", d.isoformat(), base * 0.9)
-    analysis.evaluate_due()
-    c = client.get("/api/context", headers=H).json()
-    assert [p["id"] for p in c["needs_review"]] == [r["id"]]
-    client.post(f"/api/predictions/{r['id']}/review", headers=H,
-                json={"review": "忽视拍卖", "lesson": "拍卖期间看空"})
-    c = client.get("/api/context", headers=H).json()
-    assert c["needs_review"] == []
-    assert c["lessons"][0]["content"] == "拍卖期间看空"
-    assert c["lessons"][0]["crop"] == "corn"
+def test_stat_analysis_and_evaluate(client):
+    seed(end=date.today() - timedelta(days=10))
+    r = client.post("/api/analysis", headers=H, json={"region": "周口", "crop": "corn", "horizon": 7}).json()
+    a = r["analysis"]
+    assert a["source"] == "stat" and len(a["path"]) == 7 and a["factors"] and a["stance"]
+    assert a["basis"] == "期货折算" and len(r["history"]) > 0
+    # 同一天重复生成不重复存
+    client.post("/api/analysis", headers=H, json={"region": "周口", "crop": "corn", "horizon": 7})
+    assert len(db.rows("SELECT * FROM predictions")) == 1
+    seed(days=10, end=date.today())
+    assert analysis.evaluate_due() == 1
+    rv = client.get("/api/reviews?region=周口&crop=corn", headers=H).json()
+    assert rv["checked"] == 1 and rv["pending"] == 0
+    assert rv["items"][0]["actual_price"] is not None
 
 
-def test_unknown_series_rejected(client):
-    r = client.post("/api/predictions", headers=H, json={
-        "series": "nope", "horizon_days": 7, "direction": "up", "confidence": 0.5, "reasoning": "x"})
+def test_not_enough_data(client):
+    r = client.post("/api/analysis", headers=H, json={"region": "周口", "crop": "wheat", "horizon": 3})
     assert r.status_code == 400
 
 
-def test_alerts(client):
-    seed(days=40)
-    client.post("/api/alerts", headers=H, json={"series": "futures:corn_dce", "op": "above", "value": 1})
-    assert len(analysis.check_alerts()) == 1
-    assert analysis.check_alerts() == []  # 触发一次后关闭
-
-
-def test_openapi_for_gpt(client):
-    s = client.get("/openapi.json").json()
-    ops = [o["operationId"] for p in s["paths"].values() for o in p.values()]
-    assert "getContext" in ops and len(ops) <= 30
-    assert s["servers"][0]["url"] == config.PUBLIC_URL
-
-
-def test_deepseek_daily_and_review(client, monkeypatch):
-    from app import llm
+def test_deepseek_analysis_and_review(client, monkeypatch):
     monkeypatch.setattr(config, "DEEPSEEK_API_KEY", "x")
     seed(days=60, end=date.today() - timedelta(days=10))
-    calls = []
 
-    def fake_chat(msgs, json_mode=False, timeout=120):
-        calls.append(msgs[-1]["content"])
+    def fake_chat(msgs, timeout=120):
         if "mistakes" in msgs[-1]["content"]:
             pid = db.rows("SELECT id FROM predictions WHERE source='deepseek'")[0]["id"]
-            return '{"reviews":[{"id":%d,"review":"忽视拍卖","lesson":"拍卖期看空"}]}' % pid
-        return ('{"report":"## 结论 看涨","predictions":[{"series":"futures:corn_dce","horizon_days":7,'
-                '"direction":"up","confidence":0.6,"reasoning":"r"},{"series":"bad","direction":"up"}]}')
+            return {"reviews": [{"id": pid, "review": "实际供应压力高于预期", "lesson": "新粮集中上市时偏谨慎"}]}
+        return {"direction": "up", "stance": "震荡偏强", "low": 1.1, "high": 1.2, "confidence": 0.6,
+                "path": [1.15, 1.16], "factors": [{"type": "plus", "title": "企业到货减少", "detail": "d"},
+                                                  {"type": "bad", "title": "新粮上市", "detail": "d"}],
+                "watch": "若企业连续降价，重新评估"}
     monkeypatch.setattr(llm, "chat", fake_chat)
-    assert llm.daily_analysis() == "## 结论 看涨"
-    assert len(db.rows("SELECT * FROM predictions WHERE source='deepseek'")) == 1
-    base = db.rows("SELECT base_price FROM predictions")[0]["base_price"]
+    a = client.post("/api/analysis", headers=H, json={"region": "周口", "crop": "corn", "horizon": 7}).json()["analysis"]
+    assert a["source"] == "deepseek" and a["stance"] == "震荡偏强"
+    assert len(a["path"]) == 7  # 不足 7 个自动补齐
+    assert a["factors"][1]["type"] == "neutral"
+    base = a["base_price"] * 2000
     for i in range(10):
         db.upsert_price("futures:corn_dce", (date.today() - timedelta(days=9 - i)).isoformat(), base * 0.9)
     analysis.evaluate_due()
     assert llm.review_mistakes() == 1
-    assert db.rows("SELECT content FROM lessons")[0]["content"] == "拍卖期看空"
-    assert client.get("/api/reports", headers=H).json()[0]["content"] == "## 结论 看涨"
-    monkeypatch.setattr(llm, "chat", lambda m, **k: "建议分批卖")
-    r = client.post("/api/ask", headers=H, json={"question": "卖不卖", "history": [{"role": "user", "content": "hi"}]})
-    assert r.json()["answer"] == "建议分批卖"
+    rv = client.get("/api/reviews", headers=H).json()
+    assert [p["source"] for p in rv["items"]] == ["deepseek"]  # 有 AI 记录时只展示 AI
+    assert rv["items"][0]["review"] == "实际供应压力高于预期"
+    assert rv["lessons"][0]["content"] == "新粮集中上市时偏谨慎"
+
+
+def test_deepseek_failure_falls_back(client, monkeypatch):
+    monkeypatch.setattr(config, "DEEPSEEK_API_KEY", "x")
+    seed(days=60)
+
+    def boom(*a, **k):
+        raise RuntimeError("timeout")
+    monkeypatch.setattr(llm, "chat", boom)
+    a = client.post("/api/analysis", headers=H, json={"region": "周口", "crop": "corn", "horizon": 3}).json()["analysis"]
+    assert a["source"] == "stat"
+    assert client.get("/api/status", headers=H).json()["deepseek"]["last_error"]["error"] == "timeout"
+
+
+def test_status_and_auto_job(client, monkeypatch):
+    from app import main
+    seed(days=60)
+    main.job_daily()
+    s = client.get("/api/status", headers=H).json()
+    assert s["market"]["ok"] and s["deepseek"]["ok"] is False and s["auto"]["last_run"]
+    assert len(db.rows("SELECT * FROM predictions")) == 2  # 玉米 3/7 天; 小麦无数据跳过

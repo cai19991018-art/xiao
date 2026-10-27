@@ -1,8 +1,9 @@
-"""接口服务。网页和 ChatGPT 专属 GPT 都通过 /api/* 访问, 需带请求头 X-API-Key。"""
+"""接口服务。网页通过 /api/* 访问, 需带请求头 X-API-Key。
+DeepSeek、行情采集、自动分析都在后端运行, 配置见 .env。"""
 import logging
 import threading
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import datetime
 from pathlib import Path
 from typing import Literal, Optional
 
@@ -17,6 +18,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname
 log = logging.getLogger("app")
 
 STATIC = Path(__file__).parent / "static"
+DEFAULT_PREFS = {"region": "周口", "crop": "corn", "unit": "jin"}
+Crop = Literal["corn", "wheat"]
 
 
 def auth(x_api_key: str = Header(default="")):
@@ -24,23 +27,53 @@ def auth(x_api_key: str = Header(default="")):
         raise HTTPException(401, "API Key 错误")
 
 
-scheduler = BackgroundScheduler(timezone=config.TZ)
+def prefs():
+    return {**DEFAULT_PREFS, **(db.get("prefs") or {})}
 
 
-# ---------- 定时任务 ----------
+def check_region(region):
+    if region not in config.HENAN_CITIES:
+        raise HTTPException(400, f"不支持的地区 {region}")
+
+
+# ---------- 分析与定时任务 ----------
+
+def generate(region, crop, horizon):
+    """生成一条分析: 有 DeepSeek 用 DeepSeek, 否则用统计模型。统计模型始终存一条做对照。"""
+    sid = analysis.ensure_stat(region, crop, horizon)
+    if sid is None:
+        raise HTTPException(400, "行情数据不足 20 天, 暂时无法分析")
+    if llm.enabled():
+        try:
+            llm.analyze(region, crop, horizon)
+        except Exception as e:
+            log.warning("DeepSeek 分析失败, 使用统计模型: %s", e)
+            db.put("last_ai_error", {"time": datetime.now().isoformat(timespec="minutes"), "error": str(e)[:300]})
+    return analysis.latest_analysis(region, crop, horizon)
+
 
 def job_fetch():
     fetchers.fetch_futures()
-    for msg in analysis.check_alerts():
-        fetchers.push("粮价提醒", msg)
 
 
 def job_daily():
     fetchers.fetch_weather()
-    n = analysis.evaluate_due()
-    m = analysis.run_stat_predictions()
-    log.info("复盘 %d 条, 新统计预测 %d 条", n, m)
-    llm.run_daily()
+    analysis.evaluate_due()
+    if llm.enabled():
+        try:
+            llm.review_mistakes()
+        except Exception as e:
+            log.warning("DeepSeek 复盘失败: %s", e)
+    if not config.AUTO_ANALYSIS:
+        return
+    p = prefs()
+    for crop in config.CROPS:
+        for hz in config.HORIZONS:
+            try:
+                generate(p["region"], crop, hz)
+            except HTTPException as e:
+                log.info("跳过 %s %s: %s", crop, hz, e.detail)
+    db.put("last_auto_run", datetime.now().isoformat(timespec="minutes"))
 
 
 def job_all():
@@ -48,12 +81,16 @@ def job_all():
     job_daily()
 
 
+scheduler = BackgroundScheduler(timezone=config.TZ)
+
+
 @asynccontextmanager
 async def lifespan(_app):
     db.init()
+    hh, mm = config.AUTO_ANALYSIS_TIME.split(":")
     # 国内期货 15:00 收盘, 夜盘 23:00; 美盘北京时间凌晨收盘
     scheduler.add_job(job_fetch, "cron", hour="7,15,23", minute=40)
-    scheduler.add_job(job_daily, "cron", hour=16, minute=10)
+    scheduler.add_job(job_daily, "cron", hour=int(hh), minute=int(mm))
     scheduler.start()
     if not db.rows("SELECT 1 FROM prices LIMIT 1"):
         threading.Thread(target=job_all, daemon=True).start()
@@ -61,190 +98,119 @@ async def lifespan(_app):
     scheduler.shutdown(wait=False)
 
 
-app = FastAPI(
-    title="河南粮价分析",
-    version="1.0.0",
-    description="玉米、小麦价格数据, 预测记录与复盘经验。",
-    servers=[{"url": config.PUBLIC_URL}],
-    lifespan=lifespan,
-)
+app = FastAPI(title="粮见", version="2.0.0", lifespan=lifespan, openapi_url=None, docs_url=None, redoc_url=None)
 
 
 # ---------- 请求体 ----------
 
 class PriceIn(BaseModel):
-    crop: Literal["corn", "wheat"] = Field(description="corn=玉米, wheat=小麦")
-    place: str = Field(description="地点, 如 周口、驻马店、本站")
-    price: float = Field(description="价格, 单位 元/斤")
-    date: Optional[str] = Field(None, description="YYYY-MM-DD, 默认今天")
-    note: Optional[str] = Field(None, description="备注, 如 水分14%、容重")
+    crop: Crop
+    region: str
+    price: float = Field(gt=0, description="元/斤")
+    date: Optional[str] = None
+    note: Optional[str] = None
 
 
 class NoteIn(BaseModel):
-    content: str = Field(description="一线见闻, 如 农户惜售、深加工厂提价2分")
-    date: Optional[str] = None
-
-
-class PredictionIn(BaseModel):
-    series: str = Field(description="序列名, 必须是 getContext 里 series 中已有的")
-    horizon_days: int = Field(description="预测周期天数, 常用 7/14/30")
-    direction: Literal["up", "down", "flat"] = Field(description="up涨 down跌 flat平(涨跌<0.5%)")
-    low: Optional[float] = Field(None, description="预测区间下限")
-    high: Optional[float] = Field(None, description="预测区间上限")
-    confidence: float = Field(description="把握 0-1")
-    reasoning: str = Field(description="理由")
-    factors: Optional[str] = Field(None, description="关键因素, 逗号分隔, 如 天气,政策拍卖,生猪")
-
-
-class ReviewIn(BaseModel):
-    review: str = Field(description="复盘: 错在哪里, 忽略了什么因素")
-    lesson: Optional[str] = Field(None, description="可推广的经验教训, 会存入经验库")
-    tags: Optional[str] = None
-
-
-class LessonIn(BaseModel):
     content: str
-    crop: Optional[Literal["corn", "wheat"]] = None
-    tags: Optional[str] = None
+    region: Optional[str] = None
 
 
-class AskIn(BaseModel):
-    question: str
-    history: list[dict] = []
+class PrefsIn(BaseModel):
+    region: str
+    crop: Crop
+    unit: Literal["jin", "ton"]
 
 
-class AlertIn(BaseModel):
-    series: str
-    op: Literal["above", "below"] = Field(description="above 涨破 / below 跌破")
-    value: float
+class AnalyzeIn(BaseModel):
+    region: str
+    crop: Crop
+    horizon: Literal[3, 7]
 
 
 # ---------- 接口 ----------
 
-@app.get("/api/context", operation_id="getContext", dependencies=[Depends(auth)],
-         summary="分析前必读: 最新行情、河南天气、准确率、待复盘的错误、经验库、一线见闻")
-def get_context():
-    return analysis.context()
+@app.get("/api/meta", dependencies=[Depends(auth)])
+def meta():
+    return {"province": config.PROVINCE, "regions": list(config.HENAN_CITIES), "crops": config.CROPS,
+            "horizons": config.HORIZONS, "prefs": prefs()}
 
 
-@app.get("/api/prices", operation_id="getPrices", dependencies=[Depends(auth)],
-         summary="某序列的历史价格")
-def get_prices(series: str, days: int = 120):
-    return {"series": series, "name": analysis.series_name(series),
-            "data": analysis.history(series, days)}
+@app.post("/api/prefs", dependencies=[Depends(auth)])
+def save_prefs(p: PrefsIn):
+    check_region(p.region)
+    db.put("prefs", p.model_dump())
+    return prefs()
 
 
-@app.post("/api/prices", operation_id="addLocalPrice", dependencies=[Depends(auth)],
-          summary="记录本地收购价")
+@app.get("/api/status", dependencies=[Depends(auth)])
+def status():
+    last = db.rows("SELECT MAX(date) d FROM prices WHERE series LIKE 'futures:%'")[0]["d"]
+    fresh = bool(last) and (datetime.now().date() - datetime.fromisoformat(last).date()).days <= 5
+    return {
+        "market": {"ok": fresh, "last_date": last, "last_fetch": db.get("last_fetch"),
+                   "source": "新浪财经期货日线 + 本地手动报价", "weather": "Open-Meteo",
+                   "local_min": config.LOCAL_MIN_POINTS},
+        "deepseek": {"ok": llm.enabled(), "model": config.DEEPSEEK_MODEL if llm.enabled() else None,
+                     "last_error": db.get("last_ai_error")},
+        "auto": {"ok": config.AUTO_ANALYSIS, "time": config.AUTO_ANALYSIS_TIME,
+                 "last_run": db.get("last_auto_run")},
+    }
+
+
+@app.get("/api/market", dependencies=[Depends(auth)])
+def get_market(region: str, crop: Crop, days: int = 90):
+    check_region(region)
+    return analysis.market(region, crop, days)
+
+
+@app.post("/api/prices", dependencies=[Depends(auth)])
 def add_price(p: PriceIn):
-    key = f"local:{p.crop}:{p.place}"
-    db.upsert_price(key, p.date or analysis.today(), p.price, "元/斤", "manual", p.note)
-    return {"ok": True, "series": key}
+    check_region(p.region)
+    db.upsert_price(f"local:{p.crop}:{p.region}", p.date or analysis.today(), p.price, "元/斤", "manual", p.note)
+    return {"ok": True}
 
 
-@app.post("/api/notes", operation_id="addNote", dependencies=[Depends(auth)],
-          summary="记录一线见闻")
+@app.post("/api/notes", dependencies=[Depends(auth)])
 def add_note(n: NoteIn):
-    return {"id": db.execute("INSERT INTO notes(date,content) VALUES(?,?)",
-                             (n.date or analysis.today(), n.content))}
+    return {"id": db.execute("INSERT INTO notes(date,region,content) VALUES(?,?,?)",
+                             (analysis.today(), n.region, n.content))}
 
 
-@app.get("/api/predictions", operation_id="listPredictions", dependencies=[Depends(auth)],
-         summary="预测记录")
-def list_predictions(status: Optional[Literal["open", "done"]] = None,
-                     source: Optional[Literal["stat", "gpt"]] = None, limit: int = 50):
-    sql, args = "SELECT * FROM predictions WHERE 1=1", []
-    if status:
-        sql += " AND status=?"; args.append(status)
-    if source:
-        sql += " AND source=?"; args.append(source)
-    return db.rows(sql + " ORDER BY id DESC LIMIT ?", args + [limit])
+@app.get("/api/analysis", dependencies=[Depends(auth)])
+def get_analysis(region: str, crop: Crop, horizon: int = 7):
+    check_region(region)
+    a = analysis.latest_analysis(region, crop, horizon)
+    series, scale, basis = analysis.resolve(region, crop)
+    return {"analysis": a, "basis": basis, "history": analysis.history(series, scale, days=30)[-12:]}
 
 
-@app.post("/api/predictions", operation_id="createPrediction", dependencies=[Depends(auth)],
-          summary="保存 GPT 的预测, 到期后系统自动对比实际价格")
-def create_prediction(p: PredictionIn):
-    h = analysis.history(p.series)
-    if not h:
-        raise HTTPException(400, f"没有序列 {p.series} 的数据")
-    data = p.model_dump()
-    data.update(base_date=h[-1]["date"], base_price=h[-1]["price"])
-    return {"id": analysis.save_prediction(data, "gpt"), "base_price": h[-1]["price"],
-            "base_date": h[-1]["date"]}
-
-
-@app.post("/api/predictions/{pid}/review", operation_id="reviewPrediction",
-          dependencies=[Depends(auth)], summary="给已到期的预测写复盘, 可同时存一条经验")
-def review_prediction(pid: int, r: ReviewIn):
-    p = db.rows("SELECT * FROM predictions WHERE id=?", (pid,))
-    if not p:
-        raise HTTPException(404, "预测不存在")
-    db.execute("UPDATE predictions SET review=? WHERE id=?", (r.review, pid))
-    lid = None
-    if r.lesson:
-        lid = db.execute("INSERT INTO lessons(created_at,prediction_id,crop,content,tags) "
-                         "VALUES(?,?,?,?,?)", (analysis.today(), pid,
-                                               analysis.crop_of(p[0]["series"]), r.lesson, r.tags))
-    return {"ok": True, "lesson_id": lid}
-
-
-@app.post("/api/lessons", operation_id="addLesson", dependencies=[Depends(auth)],
-          summary="直接加一条经验")
-def add_lesson(l: LessonIn):
-    return {"id": db.execute("INSERT INTO lessons(created_at,crop,content,tags) VALUES(?,?,?,?)",
-                             (analysis.today(), l.crop, l.content, l.tags))}
-
-
-@app.get("/api/alerts", operation_id="listAlerts", dependencies=[Depends(auth)],
-         summary="价格提醒列表")
-def list_alerts():
-    return db.rows("SELECT * FROM alerts ORDER BY id DESC")
-
-
-@app.post("/api/alerts", operation_id="addAlert", dependencies=[Depends(auth)],
-          summary="设置价格提醒, 触发后推送到微信")
-def add_alert(a: AlertIn):
-    return {"id": db.execute("INSERT INTO alerts(series,op,value) VALUES(?,?,?)",
-                             (a.series, a.op, a.value))}
-
-
-@app.post("/api/refresh", operation_id="refreshData", dependencies=[Depends(auth)],
-          summary="立即重新采集行情并复盘")
-def refresh():
-    job_all()
-    return {"ok": True, "series": analysis.all_series()}
-
-
-@app.get("/api/reports", operation_id="listReports", dependencies=[Depends(auth)],
-         summary="AI 每日分析报告")
-def list_reports(limit: int = 10):
-    return db.rows("SELECT * FROM reports ORDER BY id DESC LIMIT ?", (limit,))
-
-
-@app.post("/api/ask", include_in_schema=False, dependencies=[Depends(auth)])
-def ask(q: AskIn):
-    if not llm.enabled():
-        raise HTTPException(400, "未配置 DEEPSEEK_API_KEY")
-    try:
-        return {"answer": llm.ask(q.question, q.history)}
-    except Exception as e:
-        raise HTTPException(502, f"DeepSeek 调用失败: {e}")
-
-
-@app.post("/api/analyze", include_in_schema=False, dependencies=[Depends(auth)])
-def analyze_now():
-    if not llm.enabled():
-        raise HTTPException(400, "未配置 DEEPSEEK_API_KEY")
+@app.post("/api/analysis", dependencies=[Depends(auth)])
+def post_analysis(q: AnalyzeIn):
+    check_region(q.region)
     analysis.evaluate_due()
-    llm.review_mistakes()
-    return {"report": llm.daily_analysis()}
+    generate(q.region, q.crop, q.horizon)
+    return get_analysis(q.region, q.crop, q.horizon)
 
 
-@app.get("/healthz", include_in_schema=False)
+@app.get("/api/reviews", dependencies=[Depends(auth)])
+def get_reviews(region: Optional[str] = None, crop: Optional[Crop] = None):
+    return analysis.reviews(region, crop)
+
+
+@app.post("/api/refresh", dependencies=[Depends(auth)])
+def refresh():
+    job_fetch()
+    fetchers.fetch_weather()
+    analysis.evaluate_due()
+    return status()
+
+
+@app.get("/healthz")
 def healthz():
-    return {"ok": True, "date": date.today().isoformat()}
+    return {"ok": True}
 
 
-@app.get("/", include_in_schema=False)
+@app.get("/")
 def index():
     return FileResponse(STATIC / "index.html")

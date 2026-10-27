@@ -2,10 +2,13 @@
 import os
 
 DB_PATH = os.getenv("DB_PATH", "/data/grain.db")
-# GPT 和网页访问接口用的密钥, 必填, 自己随便设一串长字符
+# 网页访问接口用的密钥, 必填, 自己随便设一串长字符
 API_KEY = os.getenv("API_KEY", "")
-# 对外地址, 例如 https://xiaoliang.duckdns.org (写进 OpenAPI, GPT 动作要用)
+# 对外地址, 例如 https://xiaoliang.duckdns.org
 PUBLIC_URL = os.getenv("PUBLIC_URL", "http://localhost:8000")
+# 自动分析开关 (1 开 / 0 关) 和每天运行时间 (北京时间)
+AUTO_ANALYSIS = os.getenv("AUTO_ANALYSIS", "1") == "1"
+AUTO_ANALYSIS_TIME = os.getenv("AUTO_ANALYSIS_TIME", "16:10")
 # PushPlus 微信推送 token, 可留空 (留空则不推送)
 PUSHPLUS_TOKEN = os.getenv("PUSHPLUS_TOKEN", "")
 TZ = "Asia/Shanghai"
@@ -29,10 +32,14 @@ HENAN_CITIES = {
     "开封": (34.80, 114.31),
 }
 
+PROVINCE = "河南"
 # 本地价格序列命名: local:<品种>:<地点>, 品种 corn / wheat
 CROPS = {"corn": "玉米", "wheat": "小麦"}
+# 没有足够本地报价时, 用期货价折算成 元/斤 作参考
+PROXY = {"corn": "futures:corn_dce", "wheat": "futures:wheat_zce"}
+LOCAL_MIN_POINTS = 20   # 近 60 天本地报价达到这么多条才用本地价 (够统计模型用)
 
-HORIZONS = (7, 14, 30)  # 预测周期(天)
+HORIZONS = (3, 7)       # 预测周期(天)
 FLAT_PCT = 0.5          # 涨跌幅绝对值小于此值(%)算"平"
 
 # DeepSeek (兼容 OpenAI 格式)。留空则不启用 AI 自动分析

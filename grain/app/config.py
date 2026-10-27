@@ -4,8 +4,6 @@ import os
 DB_PATH = os.getenv("DB_PATH", "/data/grain.db")
 # 网页访问接口用的密钥, 必填, 自己随便设一串长字符
 API_KEY = os.getenv("API_KEY", "")
-# 对外地址, 例如 https://xiaoliang.duckdns.org
-PUBLIC_URL = os.getenv("PUBLIC_URL", "http://localhost:8000")
 # 自动分析开关 (1 开 / 0 关) 和每天运行时间 (北京时间)
 AUTO_ANALYSIS = os.getenv("AUTO_ANALYSIS", "1") == "1"
 AUTO_ANALYSIS_TIME = os.getenv("AUTO_ANALYSIS_TIME", "16:10")

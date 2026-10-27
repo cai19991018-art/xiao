@@ -21,23 +21,25 @@
 
 ## 部署（日本 VPS，Ubuntu 22.04）
 
-### 1. 申请免费域名（5 分钟）
-1. 打开 https://www.duckdns.org ，用 GitHub 或谷歌账号登录。
-2. 在 sub domain 填一个名字（如 `xiaoliang`），点 add domain。
-3. current ip 填你 VPS 的公网 IP，点 update ip。得到 `xiaoliang.duckdns.org`。
+不需要域名，直接用 VPS 的 IP 访问。
 
-### 2. 在 VPS 上部署
+### 1. 部署
 ```bash
 git clone -b claude/grain-price-analysis-app-n69zyd https://github.com/cai19991018-art/xiao.git
 cd xiao/grain
-bash deploy.sh          # 第一次: 安装 Docker, 生成 .env
-nano .env               # 把 DOMAIN 和 PUBLIC_URL 改成你的 duckdns 域名
-bash deploy.sh          # 第二次: 启动, 会打印 API Key
+bash deploy.sh          # 第一次: 安装 Docker, 生成 .env 和访问密钥
+nano .env               # 填 DEEPSEEK_API_KEY (见下一步)
+bash deploy.sh          # 第二次: 启动, 打印网页地址和 API Key
 ```
-VPS 服务商后台的防火墙/安全组要放行 80 和 443 端口。
 
-浏览器打开 `https://你的域名`，输入 API Key 即可看行情。第一次启动会自动采集，稍等一两分钟刷新。
+### 2. 放行端口
+在 VPS 服务商后台的防火墙 / 安全组放行 **8080** 端口（TCP）。
+
+手机浏览器打开 `http://VPS的IP:8080`，输入 API Key 即可。第一次启动会自动采集行情，稍等一两分钟刷新。
 iPhone 用 Safari 打开 → 分享 → 「添加到主屏幕」，就像一个 App。
+
+> 用 IP 访问是 http，不加密。自用问题不大，尽量别在公共 WiFi 下登录。
+> 以后想要 https，在 `.env` 填 `DOMAIN=你的域名`（域名解析到 VPS IP）并放行 80/443，重新 `bash deploy.sh` 即自动配置证书。
 
 ### 3. 接入 DeepSeek
 1. 打开 https://platform.deepseek.com 注册、充值（10 元能用很久），在「API keys」创建一个 Key。

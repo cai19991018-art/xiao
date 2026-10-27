@@ -103,3 +103,31 @@ def test_openapi_for_gpt(client):
     ops = [o["operationId"] for p in s["paths"].values() for o in p.values()]
     assert "getContext" in ops and len(ops) <= 30
     assert s["servers"][0]["url"] == config.PUBLIC_URL
+
+
+def test_deepseek_daily_and_review(client, monkeypatch):
+    from app import llm
+    monkeypatch.setattr(config, "DEEPSEEK_API_KEY", "x")
+    seed(days=60, end=date.today() - timedelta(days=10))
+    calls = []
+
+    def fake_chat(msgs, json_mode=False, timeout=120):
+        calls.append(msgs[-1]["content"])
+        if "mistakes" in msgs[-1]["content"]:
+            pid = db.rows("SELECT id FROM predictions WHERE source='deepseek'")[0]["id"]
+            return '{"reviews":[{"id":%d,"review":"忽视拍卖","lesson":"拍卖期看空"}]}' % pid
+        return ('{"report":"## 结论 看涨","predictions":[{"series":"futures:corn_dce","horizon_days":7,'
+                '"direction":"up","confidence":0.6,"reasoning":"r"},{"series":"bad","direction":"up"}]}')
+    monkeypatch.setattr(llm, "chat", fake_chat)
+    assert llm.daily_analysis() == "## 结论 看涨"
+    assert len(db.rows("SELECT * FROM predictions WHERE source='deepseek'")) == 1
+    base = db.rows("SELECT base_price FROM predictions")[0]["base_price"]
+    for i in range(10):
+        db.upsert_price("futures:corn_dce", (date.today() - timedelta(days=9 - i)).isoformat(), base * 0.9)
+    analysis.evaluate_due()
+    assert llm.review_mistakes() == 1
+    assert db.rows("SELECT content FROM lessons")[0]["content"] == "拍卖期看空"
+    assert client.get("/api/reports", headers=H).json()[0]["content"] == "## 结论 看涨"
+    monkeypatch.setattr(llm, "chat", lambda m, **k: "建议分批卖")
+    r = client.post("/api/ask", headers=H, json={"question": "卖不卖", "history": [{"role": "user", "content": "hi"}]})
+    assert r.json()["answer"] == "建议分批卖"

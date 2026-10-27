@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS weather (
 CREATE TABLE IF NOT EXISTS predictions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at TEXT NOT NULL,
-    source TEXT NOT NULL,          -- stat / gpt
+    source TEXT NOT NULL,          -- stat / deepseek / gpt
     series TEXT NOT NULL,
     base_date TEXT NOT NULL,
     base_price REAL NOT NULL,
@@ -54,6 +54,11 @@ CREATE TABLE IF NOT EXISTS notes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     date TEXT NOT NULL,
     content TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    content TEXT NOT NULL          -- AI 每日分析报告 (Markdown)
 );
 CREATE TABLE IF NOT EXISTS alerts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from . import analysis, config, db, fetchers
+from . import analysis, config, db, fetchers, llm
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("app")
@@ -40,6 +40,7 @@ def job_daily():
     n = analysis.evaluate_due()
     m = analysis.run_stat_predictions()
     log.info("复盘 %d 条, 新统计预测 %d 条", n, m)
+    llm.run_daily()
 
 
 def job_all():
@@ -105,6 +106,11 @@ class LessonIn(BaseModel):
     content: str
     crop: Optional[Literal["corn", "wheat"]] = None
     tags: Optional[str] = None
+
+
+class AskIn(BaseModel):
+    question: str
+    history: list[dict] = []
 
 
 class AlertIn(BaseModel):
@@ -207,6 +213,31 @@ def add_alert(a: AlertIn):
 def refresh():
     job_all()
     return {"ok": True, "series": analysis.all_series()}
+
+
+@app.get("/api/reports", operation_id="listReports", dependencies=[Depends(auth)],
+         summary="AI 每日分析报告")
+def list_reports(limit: int = 10):
+    return db.rows("SELECT * FROM reports ORDER BY id DESC LIMIT ?", (limit,))
+
+
+@app.post("/api/ask", include_in_schema=False, dependencies=[Depends(auth)])
+def ask(q: AskIn):
+    if not llm.enabled():
+        raise HTTPException(400, "未配置 DEEPSEEK_API_KEY")
+    try:
+        return {"answer": llm.ask(q.question, q.history)}
+    except Exception as e:
+        raise HTTPException(502, f"DeepSeek 调用失败: {e}")
+
+
+@app.post("/api/analyze", include_in_schema=False, dependencies=[Depends(auth)])
+def analyze_now():
+    if not llm.enabled():
+        raise HTTPException(400, "未配置 DEEPSEEK_API_KEY")
+    analysis.evaluate_due()
+    llm.review_mistakes()
+    return {"report": llm.daily_analysis()}
 
 
 @app.get("/healthz", include_in_schema=False)

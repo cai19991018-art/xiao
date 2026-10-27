@@ -213,8 +213,8 @@ def accuracy(days=180):
 
 
 def needs_review():
-    """GPT 做错但还没写复盘的预测, 下次对话时让 GPT 先补上教训。"""
-    return db.rows("SELECT * FROM predictions WHERE source='gpt' AND status='done' "
+    """AI 做错但还没写复盘的预测, 下次分析前先补上教训。"""
+    return db.rows("SELECT * FROM predictions WHERE source!='stat' AND status='done' "
                    "AND correct=0 AND review IS NULL ORDER BY target_date DESC LIMIT 10")
 
 
@@ -267,4 +267,6 @@ def context():
         "lessons": db.rows("SELECT id,created_at,crop,content,tags FROM lessons "
                            "ORDER BY id DESC LIMIT 30"),
         "field_notes": db.rows("SELECT date,content FROM notes ORDER BY date DESC, id DESC LIMIT 15"),
+        "latest_report": (db.rows("SELECT created_at,content FROM reports ORDER BY id DESC LIMIT 1")
+                          or [None])[0],
     }

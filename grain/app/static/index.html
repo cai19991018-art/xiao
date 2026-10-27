@@ -2,110 +2,323 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>河南粮价分析</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="粮价">
+<title>河南粮价</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
-  :root { --bg:#f6f5f1; --card:#fff; --fg:#222; --mut:#777; --up:#d23c3c; --down:#1f9d55; --acc:#b7791f; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#171717; --card:#232323; --fg:#eee; --mut:#999; } }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
-  main { max-width:960px; margin:0 auto; padding:16px; }
-  h1 { font-size:20px; margin:4px 0 12px; } h2 { font-size:16px; margin:20px 0 8px; }
-  .card { background:var(--card); border-radius:10px; padding:12px; margin-bottom:10px; box-shadow:0 1px 2px #0001; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:10px; }
-  .tile { cursor:pointer; } .tile b { font-size:22px; display:block; } .mut { color:var(--mut); font-size:13px; }
-  .up { color:var(--up); } .down { color:var(--down); }
-  input, select, button, textarea { font:inherit; padding:8px; border-radius:6px; border:1px solid #8884; background:var(--card); color:var(--fg); }
-  button { background:var(--acc); color:#fff; border:0; cursor:pointer; }
-  form { display:flex; flex-wrap:wrap; gap:8px; } form > * { flex:1 1 120px; }
-  table { width:100%; border-collapse:collapse; font-size:13px; } td, th { padding:6px 4px; border-bottom:1px solid #8882; text-align:left; }
-  .scroll { overflow-x:auto; } #login { display:none; }
+  :root {
+    --bg: #f2f2f7; --card: #ffffff; --card2: #f2f2f7; --fg: #1c1c1e; --mut: #8e8e93; --sep: rgba(60,60,67,.12);
+    --blue: #007aff; --up: #ff3b30; --down: #34c759; --orange: #ff9500; --bar: rgba(249,249,249,.82);
+    --shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #000; --card: #1c1c1e; --card2: #2c2c2e; --fg: #f2f2f7; --mut: #8e8e93; --sep: rgba(84,84,88,.5);
+      --blue: #0a84ff; --up: #ff453a; --down: #30d158; --orange: #ff9f0a; --bar: rgba(30,30,30,.8); --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); }
+  body { font: 17px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif;
+         -webkit-font-smoothing: antialiased; padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
+  main { max-width: 720px; margin: 0 auto; padding: calc(12px + env(safe-area-inset-top)) 16px 24px; }
+  .large { font-size: 34px; font-weight: 700; letter-spacing: -.02em; margin: 8px 4px 2px; }
+  .sub { color: var(--mut); font-size: 15px; margin: 0 4px 16px; }
+  h3 { font-size: 13px; font-weight: 400; text-transform: uppercase; color: var(--mut); margin: 26px 16px 8px; letter-spacing: .02em; }
+  .card { background: var(--card); border-radius: 20px; padding: 16px; box-shadow: var(--shadow); margin-bottom: 12px; }
+  .list { background: var(--card); border-radius: 16px; overflow: hidden; box-shadow: var(--shadow); }
+  .row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; min-height: 48px; position: relative; }
+  .row + .row::before { content: ""; position: absolute; top: 0; left: 16px; right: 0; border-top: .5px solid var(--sep); }
+  .row .grow { flex: 1; min-width: 0; }
+  .mut { color: var(--mut); font-size: 14px; }
+  .up { color: var(--up); } .down { color: var(--down); }
+  .tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .tile { background: var(--card); border-radius: 20px; padding: 14px 16px; box-shadow: var(--shadow); cursor: pointer; transition: transform .15s; border: 2px solid transparent; }
+  .tile:active { transform: scale(.97); }
+  .tile.on { border-color: var(--blue); }
+  .tile .name { font-size: 13px; color: var(--mut); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile .price { font-size: 26px; font-weight: 600; letter-spacing: -.02em; margin: 2px 0; font-variant-numeric: tabular-nums; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .pill.up { background: color-mix(in srgb, var(--up) 14%, transparent); }
+  .pill.down { background: color-mix(in srgb, var(--down) 14%, transparent); }
+  .pill.flat { background: var(--card2); color: var(--mut); }
+  .seg { display: flex; background: var(--card2); border-radius: 10px; padding: 2px; margin-top: 12px; }
+  .seg button { flex: 1; border: 0; background: none; color: var(--fg); font: inherit; font-size: 13px; padding: 6px; border-radius: 8px; cursor: pointer; }
+  .seg button.on { background: var(--card); box-shadow: 0 2px 6px rgba(0,0,0,.12); font-weight: 600; }
+  input, select, textarea { font: inherit; width: 100%; border: 0; background: transparent; color: var(--fg); outline: none; padding: 0; }
+  select { appearance: none; -webkit-appearance: none; }
+  .btn { display: block; width: 100%; border: 0; border-radius: 14px; background: var(--blue); color: #fff; font: inherit; font-weight: 600; padding: 14px; margin-top: 12px; cursor: pointer; transition: opacity .15s; }
+  .btn:active { opacity: .7; } .btn:disabled { opacity: .4; }
+  .btn.ghost { background: color-mix(in srgb, var(--blue) 12%, transparent); color: var(--blue); }
+  .label { width: 72px; flex: none; }
+  /* tab bar */
+  nav { position: fixed; left: 0; right: 0; bottom: 0; background: var(--bar); backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px);
+        border-top: .5px solid var(--sep); display: flex; justify-content: center; padding: 6px 0 calc(6px + env(safe-area-inset-bottom)); z-index: 10; }
+  nav button { flex: 1; max-width: 160px; border: 0; background: none; color: var(--mut); font: inherit; font-size: 11px; display: flex; flex-direction: column; align-items: center; gap: 2px; cursor: pointer; }
+  nav button svg { width: 26px; height: 26px; }
+  nav button.on { color: var(--blue); }
+  .page { display: none; animation: fade .25s ease; } .page.on { display: block; }
+  @keyframes fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  /* chat */
+  .bubbles { display: flex; flex-direction: column; gap: 8px; }
+  .bubble { max-width: 86%; padding: 10px 14px; border-radius: 20px; font-size: 16px; word-wrap: break-word; }
+  .bubble.me { align-self: flex-end; background: var(--blue); color: #fff; border-bottom-right-radius: 6px; }
+  .bubble.ai { align-self: flex-start; background: var(--card); box-shadow: var(--shadow); border-bottom-left-radius: 6px; }
+  .composer { display: flex; gap: 8px; align-items: flex-end; background: var(--card); border-radius: 22px; padding: 6px 6px 6px 16px; box-shadow: var(--shadow); margin-top: 12px; }
+  .composer textarea { resize: none; height: 36px; max-height: 120px; padding: 6px 0; line-height: 24px; align-self: center; }
+  .send { flex: none; width: 34px; height: 34px; border-radius: 50%; border: 0; background: var(--blue); color: #fff; font-size: 18px; cursor: pointer; }
+  .md h1, .md h2, .md h3 { font-size: 17px; font-weight: 600; margin: 12px 0 4px; text-transform: none; color: var(--fg); letter-spacing: 0; }
+  .md p { margin: 6px 0; } .md ul { margin: 4px 0; padding-left: 20px; }
+  .badge { font-size: 12px; padding: 2px 8px; border-radius: 6px; background: var(--card2); color: var(--mut); flex: none; }
+  .ring { width: 56px; height: 56px; flex: none; }
+  .empty { color: var(--mut); text-align: center; padding: 24px 8px; font-size: 15px; }
+  .toast { position: fixed; left: 50%; top: calc(16px + env(safe-area-inset-top)); transform: translate(-50%, -80px); background: var(--card); box-shadow: 0 8px 30px rgba(0,0,0,.18);
+           padding: 10px 18px; border-radius: 999px; font-size: 15px; transition: transform .3s cubic-bezier(.2,.9,.3,1.2); z-index: 20; }
+  .toast.show { transform: translate(-50%, 0); }
+  #login { max-width: 360px; margin: 18vh auto 0; text-align: center; }
+  .logo { width: 72px; height: 72px; border-radius: 18px; margin: 0 auto 16px; background: linear-gradient(135deg, #ffcc00, #ff9500); display: grid; place-items: center; font-size: 36px; }
 </style>
 </head>
 <body>
-<main>
-  <h1>河南粮价分析</h1>
-  <div id="login" class="card">
-    <form onsubmit="saveKey(event)"><input id="key" type="password" placeholder="输入 API Key"><button>进入</button></form>
-  </div>
-  <div id="app" style="display:none">
-    <div class="grid" id="tiles"></div>
-    <div class="card"><div class="mut" id="chartTitle"></div><canvas id="chart" height="110"></canvas></div>
+<div class="toast" id="toast"></div>
 
-    <h2>记录本地收购价（元/斤）</h2>
-    <div class="card"><form onsubmit="addPrice(event)">
-      <select id="crop"><option value="corn">玉米</option><option value="wheat">小麦</option></select>
-      <input id="place" placeholder="地点 如 周口" required>
-      <input id="price" type="number" step="0.001" placeholder="价格" required>
-      <input id="pnote" placeholder="备注 水分/容重">
-      <button>保存</button></form></div>
+<div id="login" style="display:none">
+  <div class="logo">🌾</div>
+  <div class="large" style="font-size:28px">河南粮价</div>
+  <p class="sub">输入访问密钥</p>
+  <form onsubmit="saveKey(event)">
+    <div class="list"><div class="row"><input id="key" type="password" placeholder="API Key" autocomplete="current-password"></div></div>
+    <button class="btn">进入</button>
+  </form>
+</div>
 
-    <h2>一线见闻</h2>
-    <div class="card"><form onsubmit="addNote(event)">
-      <input id="note" placeholder="如：农户惜售，深加工厂提价2分" required style="flex:3 1 240px"><button>记下</button></form>
-      <div id="notes" class="mut"></div></div>
+<main id="app" style="display:none">
+  <!-- 行情 -->
+  <section class="page on" id="p-market">
+    <div class="large">行情</div>
+    <div class="sub" id="today"></div>
+    <div class="tiles" id="tiles"></div>
+    <div class="card" style="margin-top:12px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <b id="chartTitle"></b><span class="mut" id="chartLast"></span>
+      </div>
+      <div style="height:200px;margin-top:8px"><canvas id="chart"></canvas></div>
+      <div class="seg" id="range">
+        <button data-d="30">1月</button><button data-d="90" class="on">3月</button><button data-d="365">1年</button><button data-d="1100">3年</button>
+      </div>
+    </div>
+    <h3>河南天气 · 未来10天</h3>
+    <div class="list" id="weather"></div>
+  </section>
 
-    <h2>天气（未来10天）</h2>
-    <div class="card scroll"><table id="weather"></table></div>
+  <!-- AI 分析 -->
+  <section class="page" id="p-ai">
+    <div class="large">AI 分析</div>
+    <div class="sub">DeepSeek · 每天 16:10 自动分析</div>
+    <div class="card md" id="report"></div>
+    <button class="btn ghost" id="analyzeBtn" onclick="analyzeNow()">立即重新分析</button>
+    <h3>问问 AI</h3>
+    <div class="bubbles" id="bubbles"></div>
+    <form class="composer" onsubmit="send(event)">
+      <textarea id="q" rows="1" placeholder="玉米这两周怎么走？" oninput="grow(this)" onkeydown="if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();send(event)}"></textarea>
+      <button class="send" aria-label="发送">↑</button>
+    </form>
+  </section>
 
-    <h2>预测准确率</h2>
-    <div class="card scroll"><table id="acc"></table></div>
+  <!-- 记录 -->
+  <section class="page" id="p-log">
+    <div class="large">记录</div>
+    <div class="sub">本地价和一线情况，是 AI 判断最重要的依据</div>
+    <h3>本地收购价</h3>
+    <form onsubmit="addPrice(event)">
+      <div class="list">
+        <div class="row"><span class="label">品种</span>
+          <select id="crop" class="grow"><option value="corn">玉米</option><option value="wheat">小麦</option></select><span class="mut">›</span></div>
+        <div class="row"><span class="label">地点</span><input id="place" placeholder="如 周口" required></div>
+        <div class="row"><span class="label">价格</span><input id="price" type="number" inputmode="decimal" step="0.001" placeholder="元/斤" required></div>
+        <div class="row"><span class="label">备注</span><input id="pnote" placeholder="水分、容重（可选）"></div>
+      </div>
+      <button class="btn">保存价格</button>
+    </form>
+    <h3>一线见闻</h3>
+    <form onsubmit="addNote(event)">
+      <div class="list"><div class="row"><input id="note" placeholder="如：农户惜售，深加工厂提价2分" required></div></div>
+      <button class="btn">记下</button>
+    </form>
+    <h3>最近记录</h3>
+    <div class="list" id="notes"></div>
+  </section>
 
-    <h2>预测记录</h2>
-    <div class="card scroll"><table id="preds"></table></div>
-    <h2>经验库</h2>
-    <div class="card" id="lessons"></div>
-  </div>
+  <!-- 复盘 -->
+  <section class="page" id="p-review">
+    <div class="large">复盘</div>
+    <div class="sub">每次预测到期自动对答案，错了就总结经验</div>
+    <div class="list" id="acc"></div>
+    <h3>经验库</h3>
+    <div class="list" id="lessons"></div>
+    <h3>预测记录</h3>
+    <div class="list" id="preds"></div>
+  </section>
 </main>
+
+<nav id="nav" style="display:none">
+  <button data-p="market" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l5-5 4 4 8-8"/><path d="M14 8h6v6"/></svg>行情</button>
+  <button data-p="ai"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 17l.8 2.2L22 20l-2.2.8L19 23l-.8-2.2L16 20l2.2-.8z"/></svg>AI 分析</button>
+  <button data-p="log"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></svg>记录</button>
+  <button data-p="review"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg>复盘</button>
+</nav>
+
 <script>
 let KEY = ''; try { KEY = localStorage.getItem('grainKey') || ''; } catch (e) {}
-let chart;
+let chart, CTX, cur, days = 90, chatLog = [];
+const $ = id => document.getElementById(id);
 const DIR = { up: '涨', down: '跌', flat: '平' };
-const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const SRC = { stat: '统计', deepseek: 'DeepSeek', gpt: 'GPT' };
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+function md(text) { // 轻量 Markdown: 先转义再处理标题/加粗/列表
+  return esc(text).split('\n').map(l => {
+    l = l.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+    if (/^#{1,6}\s/.test(l)) return '<h3>' + l.replace(/^#+\s/, '') + '</h3>';
+    if (/^\s*([-*]|\d+\.)\s/.test(l)) return '<ul><li>' + l.replace(/^\s*([-*]|\d+\.)\s/, '') + '</li></ul>';
+    return l.trim() ? '<p>' + l + '</p>' : '';
+  }).join('').replace(/<\/ul><ul>/g, '');
+}
+function toast(t) { const e = $('toast'); e.textContent = t; e.classList.add('show'); setTimeout(() => e.classList.remove('show'), 1800); }
 async function api(path, body) {
   const r = await fetch(path, { method: body ? 'POST' : 'GET', headers: { 'X-API-Key': KEY, 'Content-Type': 'application/json' }, body: body && JSON.stringify(body) });
-  if (r.status === 401) { showLogin(); throw new Error('401'); }
-  return r.json();
+  if (r.status === 401) { showLogin(); throw new Error('密钥错误'); }
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.detail || r.status);
+  return j;
 }
-function showLogin() { document.getElementById('login').style.display = 'block'; document.getElementById('app').style.display = 'none'; }
-function saveKey(e) { e.preventDefault(); KEY = document.getElementById('key').value; try { localStorage.setItem('grainKey', KEY); } catch (e) {} load(); }
-const pct = v => v == null ? '-' : `<span class="${v > 0 ? 'up' : v < 0 ? 'down' : ''}">${v > 0 ? '+' : ''}${v}%</span>`;
+function showLogin() { $('login').style.display = 'block'; $('app').style.display = $('nav').style.display = 'none'; }
+function saveKey(e) { e.preventDefault(); KEY = $('key').value.trim(); try { localStorage.setItem('grainKey', KEY); } catch (e) {} load().catch(err => toast(err.message)); }
+const pill = v => v == null ? '<span class="pill flat">—</span>' : `<span class="pill ${v > 0 ? 'up' : v < 0 ? 'down' : 'flat'}">${v > 0 ? '+' : ''}${v}%</span>`;
+
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.page').forEach(p => p.classList.toggle('on', p.id === 'p-' + b.dataset.p));
+  window.scrollTo({ top: 0 });
+});
+document.querySelectorAll('#range button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#range button').forEach(x => x.classList.toggle('on', x === b));
+  days = +b.dataset.d; cur && showChart(cur);
+});
 
 async function load() {
-  const c = await api('/api/context');
-  document.getElementById('login').style.display = 'none'; document.getElementById('app').style.display = 'block';
-  document.getElementById('tiles').innerHTML = c.series.map(s => `<div class="card tile" onclick="showChart('${esc(s.series)}')">
-    <div class="mut">${esc(s.name)}</div><b>${s.last_price}</b>
-    <div class="mut">日 ${pct(s.change_1)} · 周 ${pct(s.change_5)} · 月 ${pct(s.change_20)}</div><div class="mut">${s.last_date}</div></div>`).join('') || '<div class="card">暂无数据，等待首次采集…</div>';
-  if (c.series[0]) showChart(c.series[0].series);
-  document.getElementById('notes').innerHTML = c.field_notes.map(n => `<div>${n.date} ${esc(n.content)}</div>`).join('');
-  document.getElementById('weather').innerHTML = '<tr><th>城市</th><th>降水mm</th><th>最高℃</th><th>最低℃</th></tr>' +
-    c.weather_henan_next10d.map(w => `<tr><td>${w.city}</td><td>${w.next10_precip_mm}</td><td>${w.max_temp}</td><td>${w.min_temp}</td></tr>`).join('');
-  document.getElementById('acc').innerHTML = '<tr><th>来源</th><th>周期</th><th>样本</th><th>方向准确率</th><th>区间命中</th></tr>' +
-    c.accuracy.map(a => `<tr><td>${a.source === 'gpt' ? 'GPT' : '统计模型'}</td><td>${a.horizon_days}天</td><td>${a.n}</td><td>${Math.round(a.direction_accuracy * 100)}%</td><td>${Math.round(a.range_hit_rate * 100)}%</td></tr>`).join('') +
-    `<tr><td colspan="5" class="mut">信号权重：趋势 ${c.signal_weights.momentum} · 季节 ${c.signal_weights.seasonal}</td></tr>`;
-  const preds = await api('/api/predictions?limit=40');
-  document.getElementById('preds').innerHTML = '<tr><th>#</th><th>来源</th><th>品种</th><th>周期</th><th>预测</th><th>到期</th><th>结果</th></tr>' +
-    preds.map(p => `<tr><td>${p.id}</td><td>${p.source === 'gpt' ? 'GPT' : '统计'}</td><td>${esc(p.series)}</td><td>${p.horizon_days}天</td>
-      <td>${DIR[p.direction]} ${p.low ?? ''}~${p.high ?? ''}</td><td>${p.target_date}</td>
-      <td>${p.status === 'open' ? '待验证' : (p.correct ? '✅ ' : '❌ ') + pct(p.actual_change_pct)}</td></tr>`).join('');
-  document.getElementById('lessons').innerHTML = c.lessons.map(l => `<div>· ${esc(l.content)} <span class="mut">${l.created_at}</span></div>`).join('') || '<span class="mut">还没有经验，GPT 复盘后会自动积累</span>';
+  CTX = await api('/api/context');
+  $('login').style.display = 'none'; $('app').style.display = 'block'; $('nav').style.display = 'flex';
+  $('today').textContent = new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' });
+  renderMarket(); renderReport(); renderLog(); renderReview();
 }
+
+function renderMarket() {
+  const s = CTX.series;
+  $('tiles').innerHTML = s.map(x => `<div class="tile" data-s="${esc(x.series)}">
+      <div class="name">${esc(x.name)}</div><div class="price">${x.last_price}</div>
+      ${pill(x.change_1)} <span class="mut" style="font-size:12px">周 ${x.change_5 ?? '—'}%</span></div>`).join('')
+    || '<div class="card empty" style="grid-column:1/-1">正在首次采集行情，请稍后下拉刷新</div>';
+  $('tiles').querySelectorAll('.tile').forEach(t => t.onclick = () => showChart(t.dataset.s));
+  if (s[0]) showChart(cur && s.find(x => x.series === cur) ? cur : s[0].series);
+  $('weather').innerHTML = CTX.weather_henan_next10d.map(w => `<div class="row">
+      <span class="grow">${w.city}</span><span class="mut">${w.min_temp}° ~ ${w.max_temp}°</span>
+      <span class="badge">💧 ${w.next10_precip_mm}mm</span></div>`).join('') || '<div class="empty">暂无天气数据</div>';
+}
+
 async function showChart(series) {
-  const d = await api('/api/prices?days=365&series=' + encodeURIComponent(series));
-  document.getElementById('chartTitle').textContent = d.name + '（近一年）';
-  const data = { labels: d.data.map(x => x.date), datasets: [{ data: d.data.map(x => x.price), borderColor: '#b7791f', pointRadius: 0, borderWidth: 2 }] };
+  cur = series;
+  document.querySelectorAll('.tile').forEach(t => t.classList.toggle('on', t.dataset.s === series));
+  const d = await api(`/api/prices?days=${days}&series=` + encodeURIComponent(series));
+  const pts = d.data, first = pts[0]?.price, last = pts[pts.length - 1]?.price;
+  const color = last >= first ? css('--up') : css('--down');
+  $('chartTitle').textContent = d.name;
+  $('chartLast').innerHTML = first ? pill(+((last / first - 1) * 100).toFixed(2)) : '';
+  if (typeof Chart === 'undefined') return;
   if (chart) chart.destroy();
-  chart = new Chart(document.getElementById('chart'), { type: 'line', data, options: { plugins: { legend: { display: false } }, scales: { x: { ticks: { maxTicksLimit: 6 } } } } });
+  const ctx = $('chart').getContext('2d'), g = ctx.createLinearGradient(0, 0, 0, 200);
+  g.addColorStop(0, color + '40'); g.addColorStop(1, color + '00');
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: { labels: pts.map(x => x.date.slice(5)), datasets: [{ data: pts.map(x => x.price), borderColor: color, backgroundColor: g, fill: true, tension: .35, pointRadius: 0, borderWidth: 2.5 }] },
+    options: { maintainAspectRatio: false, interaction: { intersect: false, mode: 'index' },
+      plugins: { legend: { display: false }, tooltip: { displayColors: false, cornerRadius: 10, padding: 10 } },
+      scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 4, color: css('--mut') }, border: { display: false } },
+                y: { grid: { color: css('--sep') }, ticks: { maxTicksLimit: 5, color: css('--mut') }, border: { display: false } } } }
+  });
+}
+
+function renderReport() {
+  const r = CTX.latest_report;
+  $('report').innerHTML = r ? `<div class="mut" style="margin-bottom:4px">${esc(r.created_at.replace('T', ' '))}</div>${md(r.content)}`
+    : '<div class="empty">还没有 AI 报告。<br>配置 DeepSeek 后每天自动生成，也可点下方立即分析。</div>';
+}
+async function analyzeNow() {
+  const b = $('analyzeBtn'); b.disabled = true; b.textContent = '分析中，约半分钟…';
+  try { await api('/api/analyze', {}); await load(); toast('分析完成'); }
+  catch (e) { toast(e.message); }
+  b.disabled = false; b.textContent = '立即重新分析';
+}
+function grow(t) { t.style.height = '36px'; t.style.height = Math.min(t.scrollHeight, 120) + 'px'; }
+function renderChat() {
+  $('bubbles').innerHTML = chatLog.map(m => `<div class="bubble ${m.role === 'user' ? 'me' : 'ai md'}">${m.role === 'user' ? esc(m.content) : md(m.content)}</div>`).join('');
+}
+async function send(e) {
+  e.preventDefault();
+  const q = $('q').value.trim(); if (!q) return;
+  const history = chatLog.slice(); chatLog.push({ role: 'user', content: q }, { role: 'assistant', content: '思考中…' });
+  $('q').value = ''; grow($('q')); renderChat();
+  try { chatLog[chatLog.length - 1].content = (await api('/api/ask', { question: q, history })).answer; }
+  catch (err) { chatLog[chatLog.length - 1].content = '出错了：' + err.message; }
+  renderChat(); window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+}
+
+function renderLog() {
+  $('notes').innerHTML = CTX.field_notes.map(n => `<div class="row"><span class="grow">${esc(n.content)}</span><span class="mut">${n.date.slice(5)}</span></div>`).join('')
+    || '<div class="empty">还没有记录</div>';
 }
 async function addPrice(e) {
   e.preventDefault();
-  await api('/api/prices', { crop: crop.value, place: place.value, price: +price.value, note: pnote.value || null });
-  price.value = ''; pnote.value = ''; load();
+  try {
+    await api('/api/prices', { crop: $('crop').value, place: $('place').value.trim(), price: +$('price').value, note: $('pnote').value || null });
+    $('price').value = ''; $('pnote').value = ''; toast('已保存'); load();
+  } catch (err) { toast(err.message); }
 }
-async function addNote(e) { e.preventDefault(); await api('/api/notes', { content: note.value }); note.value = ''; load(); }
-KEY ? load().catch(() => {}) : showLogin();
+async function addNote(e) {
+  e.preventDefault();
+  try { await api('/api/notes', { content: $('note').value }); $('note').value = ''; toast('已记下'); load(); }
+  catch (err) { toast(err.message); }
+}
+
+function ring(p) {
+  const c = 2 * Math.PI * 22, v = p == null ? 0 : p;
+  const col = v >= .6 ? css('--down') : v >= .45 ? css('--orange') : css('--up');
+  return `<svg class="ring" viewBox="0 0 56 56"><circle cx="28" cy="28" r="22" fill="none" stroke="${css('--card2')}" stroke-width="6"/>
+    ${v > 0 ? `<circle cx="28" cy="28" r="22" fill="none" stroke="${col}" stroke-width="6" stroke-linecap="round" stroke-dasharray="${c * v} ${c}" transform="rotate(-90 28 28)"/>` : ''}
+    <text x="28" y="33" text-anchor="middle" font-size="14" font-weight="600" fill="currentColor">${p == null ? '—' : Math.round(v * 100)}</text></svg>`;
+}
+async function renderReview() {
+  $('acc').innerHTML = CTX.accuracy.map(a => `<div class="row">${ring(a.direction_accuracy)}
+      <div class="grow"><b>${SRC[a.source] || a.source}</b> · ${a.horizon_days}天<div class="mut">样本 ${a.n} · 区间命中 ${Math.round(a.range_hit_rate * 100)}%</div></div></div>`).join('')
+    + `<div class="row"><span class="grow mut">统计模型权重</span><span class="mut">趋势 ${CTX.signal_weights.momentum} · 季节 ${CTX.signal_weights.seasonal}</span></div>`;
+  if (!CTX.accuracy.length) $('acc').insertAdjacentHTML('afterbegin', '<div class="empty">预测到期后这里会显示准确率</div>');
+  $('lessons').innerHTML = CTX.lessons.map(l => `<div class="row"><span class="grow">${esc(l.content)}</span><span class="mut">${(l.created_at || '').slice(5, 10)}</span></div>`).join('')
+    || '<div class="empty">还没有经验，AI 预测错了会自动总结</div>';
+  const preds = await api('/api/predictions?limit=40');
+  const names = Object.fromEntries(CTX.series.map(s => [s.series, s.name]));
+  $('preds').innerHTML = preds.map(p => `<div class="row">
+      <div class="grow"><b>${esc(names[p.series] || p.series)}</b> <span class="badge">${SRC[p.source] || p.source}</span>
+        <div class="mut">${p.horizon_days}天看${DIR[p.direction]}${p.low != null ? ` · ${p.low}~${p.high}` : ''} · 到期 ${p.target_date.slice(5)}</div>
+        ${p.review ? `<div class="mut" style="margin-top:2px">${esc(p.review)}</div>` : ''}</div>
+      <div style="text-align:right;flex:none">${p.status === 'open' ? '<span class="badge">待验证</span>' : (p.correct ? '✅' : '❌') + '<br>' + pill(p.actual_change_pct)}</div></div>`).join('')
+    || '<div class="empty">暂无预测</div>';
+}
+
+KEY ? load().catch(() => showLogin()) : showLogin();
 </script>
 </body>
 </html>

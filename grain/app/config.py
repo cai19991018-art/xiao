@@ -34,3 +34,9 @@ CROPS = {"corn": "玉米", "wheat": "小麦"}
 
 HORIZONS = (7, 14, 30)  # 预测周期(天)
 FLAT_PCT = 0.5          # 涨跌幅绝对值小于此值(%)算"平"
+
+# DeepSeek (兼容 OpenAI 格式)。留空则不启用 AI 自动分析
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+# deepseek-chat 便宜快速; 想要更深推理可改 deepseek-reasoner
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
